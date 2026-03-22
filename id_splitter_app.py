@@ -2,259 +2,257 @@ import streamlit as st
 import pandas as pd
 import re
 import io
-from openpyxl import load_workbook
 
-# ─── Page config ────────────────────────────────────────────────────────────
+# ─── Page config ─────────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="ID Splitter",
+    page_title="Universal ID Splitter",
     page_icon="✂️",
-    layout="centered",
+    layout="wide",
 )
 
-# ─── Custom CSS ─────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
-    /* Main background */
-    .stApp { background-color: #f7f8fa; }
-
-    /* Hide default streamlit top header */
+    .stApp { background-color: #f4f6f8; }
     header[data-testid="stHeader"] { display: none; }
-
-    /* Card style */
-    .block-container {
-        padding-top: 2rem;
-        padding-bottom: 2rem;
-        max-width: 700px;
-    }
-
-    /* Title */
-    h1 { font-size: 1.6rem !important; font-weight: 600 !important; }
-
-    /* Metric cards */
-    [data-testid="metric-container"] {
-        background: white;
-        border: 1px solid #e8eaf0;
-        border-radius: 10px;
-        padding: 12px 16px;
-    }
-
-    /* Pill tags */
-    .pill-tag {
-        display: inline-block;
-        background: #eef2ff;
-        color: #3730a3;
-        font-size: 12px;
-        font-family: monospace;
-        padding: 3px 10px;
-        border-radius: 20px;
-        margin: 3px;
-    }
-
-    /* Success box */
-    .success-box {
-        background: #f0fdf4;
-        border: 1px solid #86efac;
-        border-radius: 10px;
-        padding: 16px 20px;
-        margin-top: 12px;
-    }
+    .block-container { padding-top: 2rem; }
 </style>
 """, unsafe_allow_html=True)
 
-
-# ─── Session state defaults ──────────────────────────────────────────────────
-if "uploaded_ids" not in st.session_state:
-    st.session_state.uploaded_ids = []
-if "result_ready" not in st.session_state:
-    st.session_state.result_ready = False
-if "output_bytes" not in st.session_state:
-    st.session_state.output_bytes = None
-if "summary" not in st.session_state:
-    st.session_state.summary = {}
-
-
-# ─── Header ──────────────────────────────────────────────────────────────────
-st.markdown("## ✂️ ID Splitter")
-st.markdown("Split any Excel or CSV file into separate sheets by ID group — no coding needed.")
-st.divider()
-
-
-# ─── Step 1: IDs ─────────────────────────────────────────────────────────────
-st.markdown("### Step 1 — Enter your IDs")
-
-col1, col2 = st.columns([3, 1])
-with col1:
-    manual_input = st.text_input(
-        "Type an ID and press Add",
-        placeholder="e.g. DOC88502 or 0061",
-        label_visibility="collapsed"
-    )
-with col2:
-    if st.button("Add ID", use_container_width=True):
-        val = manual_input.strip()
-        if val and val not in st.session_state.uploaded_ids:
-            st.session_state.uploaded_ids.append(val)
-
-# Upload ID sheet
-id_file = st.file_uploader(
-    "Or upload a sheet of IDs (.xlsx or .csv)",
-    type=["xlsx", "csv"],
-    key="id_upload"
-)
-if id_file:
-    try:
-        if id_file.name.endswith(".csv"):
-            id_df = pd.read_csv(id_file, encoding="utf-8", on_bad_lines="skip")
-        else:
-            id_df = pd.read_excel(id_file)
-        new_ids = id_df.iloc[:, 0].dropna().astype(str).tolist()
-        combined = list(dict.fromkeys(st.session_state.uploaded_ids + new_ids))
-        st.session_state.uploaded_ids = combined
-        st.success(f"{len(new_ids)} IDs loaded from file.")
-    except Exception as e:
-        st.error(f"Could not read ID file: {e}")
-
-# Show current ID pills
-if st.session_state.uploaded_ids:
-    pills_html = " ".join(
-        f'<span class="pill-tag">{id_}</span>'
-        for id_ in st.session_state.uploaded_ids
-    )
-    st.markdown(
-        f'<div style="margin-top:8px;">{pills_html}</div>',
-        unsafe_allow_html=True
-    )
-    if st.button("🗑️ Clear all IDs"):
-        st.session_state.uploaded_ids = []
-        st.rerun()
-else:
-    st.caption("No IDs added yet.")
-
-st.divider()
-
-
-# ─── Step 2: Data file ────────────────────────────────────────────────────────
-st.markdown("### Step 2 — Upload your data file")
-
-data_file = st.file_uploader(
-    "Choose the Excel or CSV file to split",
-    type=["xlsx", "csv"],
-    key="data_upload"
-)
-
-st.divider()
-
-
-# ─── Step 3: Options ─────────────────────────────────────────────────────────
-st.markdown("### Step 3 — Options")
-
-col_a, col_b = st.columns(2)
-with col_a:
-    show_preview = st.toggle("Show preview before download", value=True)
-with col_b:
-    include_errors = st.toggle("Include unmatched rows sheet", value=True)
-
-st.divider()
-
-
-# ─── Process ─────────────────────────────────────────────────────────────────
-st.markdown("### Step 4 — Run")
-
-run_clicked = st.button("▶ Run Splitter", type="primary", use_container_width=True)
-
-if run_clicked:
-    id_list = st.session_state.uploaded_ids
-
-    # Validation
-    if not id_list:
-        st.error("Please add at least one ID (Step 1).")
-        st.stop()
-    if data_file is None:
-        st.error("Please upload a data file (Step 2).")
-        st.stop()
-
-    with st.spinner("Reading file..."):
-        try:
-            if data_file.name.endswith(".csv"):
-                df = pd.read_csv(data_file, encoding="utf-8", on_bad_lines="skip")
-            else:
-                df = pd.read_excel(data_file)
-            df = df.astype(str)
-        except Exception as e:
-            st.error(f"Could not read data file: {e}")
-            st.stop()
-
-    # Detect column & position
-    with st.spinner("Detecting ID column..."):
-        detected_col = None
-        position_index = None
-
-        for col in df.columns:
-            for val in df[col]:
-                tokens = re.split(r"[ \-_]", val.upper())
-                for i, token in enumerate(tokens):
-                    if any(id_val.upper() in token for id_val in id_list):
-                        detected_col = col
-                        position_index = i
-                        break
-                if detected_col:
-                    break
-            if detected_col:
-                break
-
-        if detected_col is None:
-            st.error("No matching ID found in the data file. Check your IDs and try again.")
-            st.stop()
-
-    # Column selector
-    st.info(f"Auto-detected ID column: **{detected_col}**")
-    best_col = st.selectbox(
-        "Confirm or change the ID column:",
-        options=list(df.columns),
-        index=list(df.columns).index(detected_col)
-    )
-
-    # ── FIXED: extract_id now never returns a blank string ──
-    def extract_id(value):
-        tokens = re.split(r"[ \-_]", str(value).upper())
-        if len(tokens) > position_index:
-            result = tokens[position_index].strip()
-            return result if result else "UNKNOWN"
-        return "UNKNOWN"
-
-    df["GROUP"] = df[best_col].apply(extract_id)
-
-    # Preview
-    if show_preview:
-        st.markdown("#### Preview (first 10 rows)")
-        st.dataframe(df.head(10), use_container_width=True)
-
-        st.markdown("#### Group summary")
-        summary_preview = df["GROUP"].value_counts().reset_index()
-        summary_preview.columns = ["Group", "Row count"]
-        st.dataframe(summary_preview, use_container_width=True)
-
-    # Write output
-    with st.spinner("Writing output sheets..."):
-        error_df = df[df["GROUP"] == "UNKNOWN"]
-        valid_df = df[df["GROUP"] != "UNKNOWN"]
-
-        summary_df = (
-            valid_df.groupby("GROUP")
-            .size()
-            .reset_index(name="ROW_COUNT")
-            .sort_values(by="ROW_COUNT", ascending=False)
+# ─── Cached file reader ───────────────────────────────────────────────────────
+@st.cache_data(show_spinner="Reading file...")
+def read_file(file_bytes, file_name):
+    if file_name.endswith(".csv"):
+        return pd.read_csv(
+            io.BytesIO(file_bytes),
+            encoding="utf-8",
+            on_bad_lines="skip",
+            dtype=str,
+            low_memory=False
+        )
+    else:
+        return pd.read_excel(
+            io.BytesIO(file_bytes),
+            dtype=str
         )
 
-        output = io.BytesIO()
+# ─── Session state ────────────────────────────────────────────────────────────
+for key, default in {
+    "uploaded_ids": [],
+    "output_bytes": None,
+    "result_summary": None,
+    "detected_col": None,
+    "position_index": None,
+    "df": None,
+    "all_columns": [],
+    "show_preview": True,
+    "id_list": [],
+    "processing_done": False,
+    "id_file_name": None,
+    "data_file_name": None,
+    "cached_data_df": None,
+}.items():
+    if key not in st.session_state:
+        st.session_state[key] = default
+
+# ─── Title ────────────────────────────────────────────────────────────────────
+st.title("📊 Universal ID Splitter")
+st.divider()
+
+# ─── Sidebar ─────────────────────────────────────────────────────────────────
+st.sidebar.header("Inputs")
+
+manual_id    = st.sidebar.text_input("Enter ID", placeholder="e.g. DOC88502 or 0061")
+id_file      = st.sidebar.file_uploader("Upload ID Sheet", type=["xlsx", "csv"])
+data_file    = st.sidebar.file_uploader("Upload Data File", type=["xlsx", "csv"])
+show_preview = st.sidebar.checkbox("Show Preview", value=True)
+
+# Read ID file — cached
+if id_file:
+    if id_file.name != st.session_state.id_file_name:
+        try:
+            id_df = read_file(id_file.read(), id_file.name)
+            st.session_state.uploaded_ids = id_df.iloc[:, 0].dropna().astype(str).tolist()
+            st.session_state.id_file_name = id_file.name
+        except Exception as e:
+            st.sidebar.error(f"Error reading ID file: {e}")
+    st.sidebar.success(f"{len(st.session_state.uploaded_ids)} IDs loaded ✅")
+
+# Read data file — cached
+if data_file:
+    if data_file.name != st.session_state.data_file_name:
+        try:
+            cached_df = read_file(data_file.read(), data_file.name)
+            st.session_state.cached_data_df = cached_df
+            st.session_state.data_file_name = data_file.name
+        except Exception as e:
+            st.sidebar.error(f"Error reading data file: {e}")
+    st.sidebar.success(f"Data file ready ✅: {data_file.name}")
+
+# ─── STEP 1: Process File ─────────────────────────────────────────────────────
+if st.sidebar.button("🚀 Process File"):
+
+    for key in ["output_bytes", "result_summary", "detected_col", "position_index",
+                "df", "all_columns", "id_list", "processing_done"]:
+        st.session_state[key] = False if key == "processing_done" else None if key not in ["all_columns", "id_list"] else []
+
+    id_list = []
+    if manual_id.strip():
+        id_list.append(manual_id.strip())
+    if st.session_state.uploaded_ids:
+        id_list.extend(st.session_state.uploaded_ids)
+
+    if not id_list:
+        st.error("Provide at least one ID")
+        st.stop()
+
+    if st.session_state.cached_data_df is None:
+        st.error("Please upload a data file")
+        st.stop()
+
+    df = st.session_state.cached_data_df.copy()
+
+    # ── FIXED DETECTION: finds exact token position where ID sits ─────────
+    detected_col   = None
+    position_index = None
+    match_type     = None  # "exact_cell" or "token"
+
+    for col in df.columns:
+        for val in df[col]:
+            val_str   = str(val).strip()
+            val_upper = val_str.upper()
+
+            # 1. Exact full cell match
+            if any(id_val.strip().upper() == val_upper for id_val in id_list):
+                detected_col   = col
+                position_index = None
+                match_type     = "exact_cell"
+                break
+
+            # 2. Token match — split by space, dash, underscore
+            tokens = re.split(r"[ \-_]", val_upper)
+            for i, token in enumerate(tokens):
+                clean_token = token.strip()
+                if any(id_val.strip().upper() == clean_token for id_val in id_list):
+                    detected_col   = col
+                    position_index = i
+                    match_type     = "token"
+                    break
+
+            # 3. Substring match fallback
+            if not detected_col:
+                if any(id_val.strip().upper() in val_upper for id_val in id_list):
+                    detected_col   = col
+                    position_index = None
+                    match_type     = "substring"
+                    break
+
+            if detected_col:
+                break
+        if detected_col:
+            break
+
+    if not detected_col:
+        st.error("No matching ID found")
+        st.stop()
+
+    # Persist to session state
+    st.session_state.detected_col   = detected_col
+    st.session_state.position_index = position_index
+    st.session_state.match_type     = match_type
+    st.session_state.df             = df
+    st.session_state.all_columns    = list(df.columns)
+    st.session_state.show_preview   = show_preview
+    st.session_state.id_list        = id_list
+
+
+# ─── STEP 2: Dropdown + validation + live preview ─────────────────────────────
+if st.session_state.detected_col is not None and st.session_state.df is not None and not st.session_state.processing_done:
+
+    st.success(f"Detected column: **{st.session_state.detected_col}**")
+
+    selected_col = st.selectbox(
+        "Confirm or change column:",
+        options=st.session_state.all_columns,
+        index=st.session_state.all_columns.index(st.session_state.detected_col),
+        key="col_selectbox"
+    )
+
+    df             = st.session_state.df
+    position_index = st.session_state.position_index
+    match_type     = st.session_state.get("match_type", "substring")
+    id_list        = st.session_state.id_list
+
+    # Validate entered ID exists in selected column
+    col_values_upper = df[selected_col].str.strip().str.upper()
+    id_found_in_col  = any(
+        col_values_upper.str.contains(id_val.strip().upper(), regex=False).any()
+        for id_val in id_list
+    )
+
+    if not id_found_in_col:
+        st.error(
+            f"❌ None of the entered IDs were found in column **'{selected_col}'**. "
+            f"Please choose a different column that contains your ID."
+        )
+        st.stop()
+
+    # ── FIXED GROUP EXTRACTION ────────────────────────────────────────────
+    # If token match: extract value at the detected token position for every row
+    # If exact/substring: use the full cell value
+    def extract_group(value):
+        val_str = str(value).strip()
+        if not val_str or val_str.upper() == "NAN":
+            return "UNKNOWN"
+
+        if match_type == "token" and position_index is not None:
+            tokens = re.split(r"[ \-_]", val_str)
+            if len(tokens) > position_index:
+                result = tokens[position_index].strip()
+                return result if result else "UNKNOWN"
+            return "UNKNOWN"
+        else:
+            # Exact cell or substring — use full cell value as group
+            return val_str if val_str else "UNKNOWN"
+
+    df["GROUP"] = df[selected_col].apply(extract_group)
+    df["GROUP"] = df["GROUP"].replace("", "UNKNOWN")
+
+    error_df = df[df["GROUP"] == "UNKNOWN"]
+    valid_df = df[df["GROUP"] != "UNKNOWN"]
+
+    summary_df = (
+        valid_df.groupby("GROUP")
+        .size()
+        .reset_index(name="ROW_COUNT")
+        .sort_values(by="ROW_COUNT", ascending=False)
+    )
+
+    # Metrics
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Total Rows", len(df))
+    c2.metric("Matched Rows", len(valid_df))
+    c3.metric("Unmatched Rows", len(error_df))
+
+    # Preview
+    st.subheader("Preview (First 10 Rows)")
+    st.dataframe(df.head(10), use_container_width=True)
+
+    st.subheader("Group Summary")
+    st.dataframe(summary_df, use_container_width=True)
+
+    st.divider()
+
+    # Export button
+    if st.button("📥 Confirm & Export", type="primary", use_container_width=True):
+
+        output     = io.BytesIO()
         unique_ids = valid_df["GROUP"].unique()
 
         progress_bar = st.progress(0, text="Writing sheets...")
         with pd.ExcelWriter(output, engine="openpyxl") as writer:
             for i, uid in enumerate(unique_ids):
-                group_df = valid_df[valid_df["GROUP"] == uid].drop(columns=["GROUP"])
-                # ── FIXED: guarantee sheet name is never blank ──
-                sheet_name = str(uid).strip()[:30]
+                group_df   = valid_df[valid_df["GROUP"] == uid].drop(columns=["GROUP"])
+                sheet_name = re.sub(r"[\\/*?:\[\]]", "", str(uid)).strip()[:30]
                 if not sheet_name:
                     sheet_name = f"GROUP_{i+1}"
                 group_df.to_excel(writer, sheet_name=sheet_name, index=False)
@@ -262,49 +260,38 @@ if run_clicked:
                     int((i + 1) / len(unique_ids) * 90),
                     text=f"Writing sheet {i+1} of {len(unique_ids)}: {sheet_name}"
                 )
-
             summary_df.to_excel(writer, sheet_name="SUMMARY", index=False)
-
-            if include_errors and not error_df.empty:
-                error_df.drop(columns=["GROUP"]).to_excel(
-                    writer, sheet_name="ERRORS", index=False
-                )
+            if not error_df.empty:
+                error_df.drop(columns=["GROUP"]).to_excel(writer, sheet_name="ERRORS", index=False)
 
         progress_bar.progress(100, text="Done!")
 
-    st.session_state.output_bytes = output.getvalue()
-    st.session_state.result_ready = True
-    st.session_state.summary = {
-        "sheets": len(unique_ids),
-        "matched": len(valid_df),
-        "unmatched": len(error_df),
-    }
+        st.session_state.output_bytes    = output.getvalue()
+        st.session_state.result_summary  = {"sheets": len(unique_ids), "unmatched": len(error_df)}
+        st.session_state.processing_done = True
+        st.session_state.detected_col    = None
+        st.session_state.df              = None
+        st.rerun()
 
 
-# ─── Result ──────────────────────────────────────────────────────────────────
-if st.session_state.result_ready and st.session_state.output_bytes:
-    s = st.session_state.summary
-
-    st.markdown('<div class="success-box">', unsafe_allow_html=True)
-    st.markdown("**✅ Done! Your file is ready.**")
-    st.markdown('</div>', unsafe_allow_html=True)
-
-    m1, m2, m3 = st.columns(3)
-    m1.metric("Sheets created", s["sheets"])
-    m2.metric("Rows matched", s["matched"])
-    m3.metric("Unmatched rows", s["unmatched"])
+# ─── STEP 3: Download ─────────────────────────────────────────────────────────
+if st.session_state.processing_done and st.session_state.output_bytes:
+    s = st.session_state.result_summary
+    st.success(f"✅ Done! {s['sheets']} sheets created, {s['unmatched']} unmatched rows")
 
     st.download_button(
-        label="⬇️ Download Output Excel",
+        label="📥 Download Processed File",
         data=st.session_state.output_bytes,
-        file_name="id_splitter_output.xlsx",
+        file_name="processed_output.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         use_container_width=True,
         type="primary"
     )
 
-    if st.button("🔄 Start over", use_container_width=True):
-        for key in ["uploaded_ids", "result_ready", "output_bytes", "summary"]:
-            if key in st.session_state:
-                del st.session_state[key]
+    if st.button("🔄 Start Over"):
+        for key in ["uploaded_ids", "output_bytes", "result_summary", "detected_col",
+                    "position_index", "df", "all_columns", "id_list",
+                    "id_file_name", "data_file_name", "cached_data_df"]:
+            st.session_state[key] = [] if key in ["uploaded_ids", "all_columns", "id_list"] else None
+        st.session_state.processing_done = False
         st.rerun()
